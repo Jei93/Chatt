@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Chat Privado con Salas y Subida de Archivos</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;background:#0f1720;color:#e6eef8;margin:0;padding:20px;display:flex;flex-direction:column;align-items:center;}
+    .card{background:#0b1220;border-radius:10px;padding:16px;width:100%;max-width:920px;box-shadow:0 6px 18px rgba(0,0,0,0.5);margin-bottom:12px;}
+    h1{margin:0 0 8px 0;font-size:20px;}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+    input,button,textarea,select{padding:8px;border-radius:6px;border:1px solid #22303f;background:#0f1720;color:#e6eef8;}
+    button{background:#0ea5ff;border:none;cursor:pointer;}
+    #chat{height:360px;overflow:auto;border-radius:8px;padding:10px;background:#07101a;border:1px solid #123242;}
+    .msg{padding:6px 8px;border-radius:6px;margin:6px 0;max-width:75%;}
+    .mine{background:#083b5c;margin-left:auto;text-align:right;}
+    .other{background:#123742;text-align:left;}
+    .meta{font-size:12px;color:#9fb4c9;}
+    .small{font-size:13px;color:#9fb4c9;}
+    .hidden{display:none;}
+    label{font-size:13px;color:#9fb4c9;}
+    .files-list a{display:block;word-break:break-word;}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Chat privado — Salas y subida de archivos</h1>
+    <div id="auth-section" class="row">
+      <div>
+        <label>Email</label><br/>
+        <input id="email" type="email" placeholder="tucorreo@dominio.com" />
+      </div>
+      <div>
+        <label>Contraseña</label><br/>
+        <input id="password" type="password" placeholder="contraseña" />
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        <button id="btn-signup">Registrarse</button>
+        <button id="btn-signin">Iniciar sesión</button>
+        <button id="btn-signout" class="hidden">Cerrar sesión</button>
+      </div>
+      <div style="margin-left:auto;">
+        <div class="small">Usuario: <span id="current-user">— no autenticado —</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <button id="btn-create-room">Crear sala privada</button>
+      <div>
+        <label>UNIRSE a sala (ID)</label><br/>
+        <input id="join-room-id" placeholder="Ej: A1B2C3" />
+      </div>
+      <div style="display:flex;flex-direction:column;">
+        <button id="btn-join-room">Unirse</button>
+      </div>
+      <div style="margin-left:auto;text-align:right;">
+        <div class="small">Sala actual: <strong id="current-room">— ninguna —</strong></div>
+        <div class="small">Propietario: <span id="room-owner">—</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="chat" aria-live="polite"></div>
+
+    <div style="display:flex;gap:8px;margin-top:10px;align-items:center;">
+      <input id="message-input" placeholder="Escribe un mensaje..." style="flex:1" />
+      <input id="file-input" type="file" />
+      <button id="btn-send">Enviar</button>
+    </div>
+    <div class="small" style="margin-top:6px;color:#9fb4c9">
+      :: Los archivos subidos se guardan en Firebase Storage y se comparten como enlaces dentro de la sala.
+    </div>
+  </div>
+
+  <div class="card small">
+    <div>Instrucciones rápidas:
+      <ul>
+        <li>Activa en Firebase: Authentication → Email/Password</li>
+        <li>Activa Realtime Database y Storage (y aplica las reglas recomendadas abajo)</li>
+        <li>Comparte el <strong>ID de sala</strong> con la persona que quieras que se una — solo los miembros podrán leer/escribir.</li>
+    </div>
+  </div>
+
+  <script type="module">
+    // Firebase SDK modular (v9)
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.6.1/firebase-app.js";
+    import {
+      getAuth,
+      createUserWithEmailAndPassword,
+      signInWithEmailAndPassword,
+      signOut,
+      onAuthStateChanged
+    } from "https://www.gstatic.com/firebasejs/9.6.1/firebase-auth.js";
+    import {
+      getDatabase,
+      ref as dbRef,
+      set,
+      push,
+      onChildAdded,
+      get,
+      child,
+      update
+    } from "https://www.gstatic.com/firebasejs/9.6.1/firebase-database.js";
+    import {
+      getStorage,
+      ref as storageRef,
+      uploadBytesResumable,
+      getDownloadURL
+    } from "https://www.gstatic.com/firebasejs/9.6.1/firebase-storage.js";
+    import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.6.1/firebase-analytics.js";
+
+    // --- Tu configuración de Firebase (ya pegada) ---
+    const firebaseConfig = {
+      apiKey: "AIzaSyCgiXbMuelJz2QT8-1DH9B6h2F8YA8vle0",
+      authDomain: "chat-amigos-d7364.firebaseapp.com",
+      databaseURL: "https://chat-amigos-d7364-default-rtdb.firebaseio.com",
+      projectId: "chat-amigos-d7364",
+      storageBucket: "chat-amigos-d7364.firebasestorage.app",
+      messagingSenderId: "294641000709",
+      appId: "1:294641000709:web:0d01d2fc90dd6183f9576c",
+      measurementId: "G-VHQJEL2E1X"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    try{ getAnalytics(app); }catch(e){ /* analytics opcional */ }
+    const auth = getAuth(app);
+    const db = getDatabase(app);
+    const storage = getStorage(app);
+
+    // --- DOM ---
+    const emailEl = document.getElementById('email');
+    const passEl = document.getElementById('password');
+    const btnSignup = document.getElementById('btn-signup');
+    const btnSignin = document.getElementById('btn-signin');
+    const btnSignout = document.getElementById('btn-signout');
+    const currentUserEl = document.getElementById('current-user');
+
+    const btnCreateRoom = document.getElementById('btn-create-room');
+    const joinRoomIdEl = document.getElementById('join-room-id');
+    const btnJoinRoom = document.getElementById('btn-join-room');
+    const currentRoomEl = document.getElementById('current-room');
+    const roomOwnerEl = document.getElementById('room-owner');
+
+    const chatEl = document.getElementById('chat');
+    const messageInput = document.getElementById('message-input');
+    const btnSend = document.getElementById('btn-send');
+    const fileInput = document.getElementById('file-input');
+
+    let currentUser = null;
+    let currentRoomId = null;
+    let roomListenerUnsubscribe = null;
+
+    // ---------------- AUTH ----------------
+    btnSignup.addEventListener('click', async () => {
+      const email = emailEl.value.trim();
+      const pass = passEl.value;
+      if(!email || !pass){ alert('Pon email y contraseña'); return; }
+      try {
+        await createUserWithEmailAndPassword(auth, email, pass);
+        alert('Registrado. Revisa tu sesión (ya logueado).');
+      } catch (err) { alert('Error registro: '+err.message); }
+    });
+
+    btnSignin.addEventListener('click', async () => {
+      const email = emailEl.value.trim();
+      const pass = passEl.value;
+      if(!email || !pass){ alert('Pon email y contraseña'); return; }
+      try {
+        await signInWithEmailAndPassword(auth, email, pass);
+      } catch (err) { alert('Error login: '+err.message); }
+    });
+
+    btnSignout.addEventListener('click', async () => {
+      await signOut(auth);
+    });
+
+    onAuthStateChanged(auth, user => {
+      currentUser = user;
+      if(user){
+        currentUserEl.textContent = `${user.email || user.uid}`;
+        btnSignout.classList.remove('hidden');
+        btnSignin.classList.add('hidden');
+        btnSignup.classList.add('hidden');
+      } else {
+        currentUserEl.textContent = '— no autenticado —';
+        btnSignout.classList.add('hidden');
+        btnSignin.classList.remove('hidden');
+        btnSignup.classList.remove('hidden');
+        leaveRoom();
+      }
+    });
+
+    // ---------------- ROOMS ----------------
+    function makeRoomId(len = 6){
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // evitar I,O,1,0
+      let out = '';
+      for(let i=0;i<len;i++) out += chars[Math.floor(Math.random()*chars.length)];
+      return out;
+    }
+
+    btnCreateRoom.addEventListener('click', async () => {
+      if(!currentUser){ alert('Inicia sesión primero'); return; }
+      const roomId = makeRoomId(6);
+      const metadata = {
+        owner: currentUser.uid,
+        createdAt: Date.now(),
+        members: { [currentUser.uid]: true }
+      };
+      try {
+        await set(dbRef(db, `rooms/${roomId}/meta`), metadata);
+        joinRoom(roomId);
+        alert('Sala creada: ' + roomId + '\nCompártela con quien quieras.');
+      } catch (err) {
+        alert('Error creando sala: '+err.message);
+      }
+    });
+
+    btnJoinRoom.addEventListener('click', async () => {
+      const id = (joinRoomIdEl.value || '').trim().toUpperCase();
+      if(!id){ alert('Escribe un ID de sala'); return; }
+      await joinRoom(id);
+    });
+
+    async function joinRoom(roomId){
+      if(!currentUser){ alert('Inicia sesión primero'); return; }
+      // comprobar existencia
+      const roomMetaSnap = await get(child(dbRef(db), `rooms/${roomId}/meta`));
+      if(!roomMetaSnap.exists()){
+        alert('Sala no encontrada: ' + roomId);
+        return;
+      }
+      // añadir miembro
+      await update(dbRef(db, `rooms/${roomId}/meta/members`), { [currentUser.uid]: true });
+      // set current
+      openRoom(roomId);
+    }
+
+    async function openRoom(roomId){
+      leaveRoom(); // limpia listener previo
+      currentRoomId = roomId;
+      currentRoomEl.textContent = roomId;
+      // mostrar owner
+      const metaSnap = await get(child(dbRef(db), `rooms/${roomId}/meta`));
+      if(metaSnap.exists()){
+        const meta = metaSnap.val();
+        roomOwnerEl.textContent = meta.owner || '—';
+      } else {
+        roomOwnerEl.textContent = '—';
+      }
+      // escuchar mensajes
+      const messagesRef = dbRef(db, `rooms/${roomId}/messages`);
+      onChildAdded(messagesRef, snapshot => {
+        const obj = snapshot.val();
+        renderMessage(obj);
+      });
+      // opcional: podrías mantener la referencia para quitar listener si usar onValue + off
+    }
+
+    function leaveRoom(){
+      currentRoomId = null;
+      currentRoomEl.textContent = '— ninguna —';
+      roomOwnerEl.textContent = '—';
+      chatEl.innerHTML = '';
+    }
+
+    // ---------------- SEND TEXT / FILE ----------------
+    btnSend.addEventListener('click', sendMessage);
+    messageInput.addEventListener('keydown', e => { if(e.key === 'Enter') sendMessage(); });
+
+    async function sendMessage(){
+      if(!currentUser) { alert('Inicia sesión'); return; }
+      if(!currentRoomId){ alert('Únete a una sala'); return; }
+      const text = messageInput.value.trim();
+      const file = fileInput.files[0];
+      if(!text && !file){ return; }
+      // si hay archivo, subir primero
+      if(file){
+        await uploadFileAndSendMessage(file, text);
+      } else {
+        const payload = {
+          type: 'text',
+          text,
+          userId: currentUser.uid,
+          userEmail: currentUser.email || null,
+          ts: Date.now()
+        };
+        await push(dbRef(db, `rooms/${currentRoomId}/messages`), payload);
+      }
+      messageInput.value = '';
+      fileInput.value = '';
+    }
+
+    async function uploadFileAndSendMessage(file, optionalText = ''){
+      if(!currentRoomId){ alert('Únete a una sala'); return; }
+      const filename = Date.now() + '_' + file.name.replace(/\s+/g,'_');
+      const path = `rooms/${currentRoomId}/files/${filename}`;
+      const sRef = storageRef(storage, path);
+      const uploadTask = uploadBytesResumable(sRef, file);
+      // opcional: puedes mostrar progreso
+      uploadTask.on('state_changed', 
+        snapshot => { /* progreso opcional */ },
+        error => { alert('Error upload: '+error.message); },
+        async () => {
+          const url = await getDownloadURL(uploadTask.snapshot.ref);
+          const payload = {
+            type: 'file',
+            fileName: file.name,
+            fileUrl: url,
+            filePath: path,
+            text: optionalText || '',
+            userId: currentUser.uid,
+            userEmail: currentUser.email || null,
+            ts: Date.now()
+          };
+          await push(dbRef(db, `rooms/${currentRoomId}/messages`), payload);
+        }
+      );
+    }
+
+    // ---------------- RENDER ----------------
+    function renderMessage(msg){
+      const div = document.createElement('div');
+      div.classList.add('msg');
+      div.classList.add(msg.userId === (currentUser && currentUser.uid) ? 'mine' : 'other');
+      const meta = document.createElement('div');
+      meta.classList.add('meta');
+      meta.textContent = `${msg.userEmail || msg.userId} — ${new Date(msg.ts).toLocaleString()}`;
+      div.appendChild(meta);
+
+      if(msg.type === 'text' || msg.text){
+        const p = document.createElement('div');
+        p.textContent = msg.text || msg.text === '' ? msg.text : (msg.text || msg.text === undefined ? msg.text : '');
+        div.appendChild(p);
+      }
+
+      if(msg.type === 'file' && msg.fileUrl){
+        const a = document.createElement('a');
+        a.href = msg.fileUrl;
+        a.target = '_blank';
+        a.textContent = '📎 ' + (msg.fileName || 'Archivo');
+        div.appendChild(a);
+      }
+
+      chatEl.appendChild(div);
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+
+    // -------------- Al cargar: si quieres auto join si URL tiene ?room=ID --------------
+    (function tryAutoJoinFromQuery(){
+      const params = new URLSearchParams(location.search);
+      const r = (params.get('room') || '').toUpperCase();
+      if(r) joinRoomIdEl.value = r;
+    })();
+
+  </script>
+</body>
+</html>
